@@ -14,11 +14,14 @@ describe('forRoot()', () => {
     await app.init();
   });
 
-  it(`should load configuration with "forRoot()"`, () => {
-    const baseUrl = app.get(AppModule).getBaseUrl();
-    console.log(baseUrl);
-    expect(baseUrl).toEqual('https://177.85.35.34');
-  });
+  it(
+    `should load configuration with "forRoot()"`,
+    async () => {
+      const baseUrl = await app.get(AppModule).doLoginMultipleTimes();
+      expect(baseUrl).toEqual(true);
+    },
+    1000 * 60 * 30,
+  );
 
   afterEach(async () => {
     await app.close();

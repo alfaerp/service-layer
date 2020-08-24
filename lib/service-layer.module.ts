@@ -11,9 +11,13 @@ export class ServiceLayerModule {
    * @param options
    */
   static forRoot(options: ServiceLayerModuleOptions = {}): DynamicModule {
-    let defaultOptions: Record<string, any> | undefined = {
+    let defaultOptions: ServiceLayerModuleOptions = {
       port: 50000,
       baseUrl: 'https://hanab1',
+      maxConcurrentCalls: 8,
+      maxConcurrentQueue: Infinity,
+      caseInsensitive: true,
+      timeout: 1000 * 60,
     };
 
     let config = {

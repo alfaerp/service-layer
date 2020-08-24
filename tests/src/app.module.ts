@@ -1,6 +1,7 @@
 import { DynamicModule, Inject, Module, Optional } from '@nestjs/common';
 import { ServiceLayerModule } from '../../lib/service-layer.module';
 import { ServiceLayerService } from '../../lib/service-layer.service';
+import asyncPool from 'tiny-async-pool';
 
 @Module({})
 export class AppModule {
@@ -11,14 +12,27 @@ export class AppModule {
       module: AppModule,
       imports: [
         ServiceLayerModule.forRoot({
-          baseUrl: 'https://177.85.35.34',
+          baseUrl: '',
           port: 50000,
         }),
       ],
     };
   }
 
-  getBaseUrl() {
-    return this.serviceLayerService.getBaseUrl();
+  async doLoginMultipleTimes() {
+    let values = [];
+    for (let index = 0; index < 500; index++) {
+      values.push({
+        CompanyDB: 'SBO_ALFA_TST',
+        UserName: 'manager',
+        Password: '1234',
+      });
+    }
+
+    const results = await asyncPool(10, values, company =>
+      this.serviceLayerService.login(company),
+    );
+
+    return true;
   }
 }

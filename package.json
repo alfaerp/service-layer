@@ -16,7 +16,12 @@
     "prerelease": "npm run build",
     "release": "release-it"
   },
-  "dependencies": {},
+  "dependencies": {
+    "@types/tiny-async-pool": "^1.0.0",
+    "axios": "^0.20.0",
+    "exponential-backoff": "^3.1.0",
+    "tiny-async-pool": "^1.1.0"
+  },
   "devDependencies": {
     "@commitlint/cli": "9.1.2",
     "@commitlint/config-angular": "9.1.2",
@@ -60,6 +65,15 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/alfaerp/service-layer"
+    "url": "git+https://github.com/alfaerp/service-layer.git"
+  },
+  "bugs": {
+    "url": "https://github.com/alfaerp/service-layer/issues"
+  },
+  "homepage": "https://github.com/alfaerp/service-layer#readme",
+  "main": "index.js",
+  "directories": {
+    "lib": "lib",
+    "test": "tests"
   }
 }
