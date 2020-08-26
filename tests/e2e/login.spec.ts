@@ -2,7 +2,7 @@ import { INestApplication } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import { AppModule } from '../src/app.module';
 
-describe('forRoot()', () => {
+describe('login()', () => {
   let app: INestApplication;
 
   beforeEach(async () => {
@@ -15,10 +15,20 @@ describe('forRoot()', () => {
   });
 
   it(
-    `should load configuration with "forRoot()"`,
+    `should load configuration with "forRoot() and login"`,
     async () => {
-      const baseUrl = await app.get(AppModule).doLoginMultipleTimes();
-      expect(baseUrl).toEqual(true);
+      const result = await app.get(AppModule).login();
+      expect(result).not.toBeNull();
+    },
+    1000 * 60 * 30,
+  );
+
+  it(
+    `should load configuration with "forRoot() and get paths"`,
+    async () => {
+      let mymodule = app.get(AppModule);
+      const result = await mymodule.getPath();
+      expect(result).toBe('Alfa');
     },
     1000 * 60 * 30,
   );

@@ -2,6 +2,8 @@ import { DynamicModule, Inject, Module, Optional } from '@nestjs/common';
 import { ServiceLayerModule } from '../../lib/service-layer.module';
 import { ServiceLayerService } from '../../lib/service-layer.service';
 import asyncPool from 'tiny-async-pool';
+import { Endpoints } from '../../lib/service-layer.constants';
+import * as _ from 'lodash';
 
 @Module({})
 export class AppModule {
@@ -12,27 +14,63 @@ export class AppModule {
       module: AppModule,
       imports: [
         ServiceLayerModule.forRoot({
-          baseUrl: '',
+          baseUrl: 'https://hanab1',
           port: 50000,
+          maxConcurrentCalls: 10,
         }),
       ],
     };
   }
 
-  async doLoginMultipleTimes() {
-    let values = [];
-    for (let index = 0; index < 500; index++) {
-      values.push({
-        CompanyDB: 'SBO_ALFA_TST',
-        UserName: 'manager',
-        Password: '1234',
-      });
-    }
+  async login(): Promise<boolean> {
+    let company = {
+      CompanyDB: 'SBO_ALFA_TST',
+      Password: '1234',
+      UserName: 'manager',
+    };
+    let result = await this.serviceLayerService.post(Endpoints.Login, company);
+    return result && result.data && result.data.SessionId;
+  }
 
-    const results = await asyncPool(10, values, company =>
-      this.serviceLayerService.login(company),
+  async getPath(): Promise<string> {
+    let config = {
+      headers: {
+        'alfaerp-company': '',
+        'alfaerp-password': '',
+        'alfaerp-username': '',
+      },
+    };
+
+    let result = await this.serviceLayerService.post(
+      Endpoints.CompanyService_GetPathAdmin,
+      null,
+      config,
     );
-
-    return true;
+    return result && result.data && result.data.PrintId;
   }
 }
+
+//   await asyncPool(10, values, async (item) => {
+//     try {
+//       let result =
+//       counting++;
+//       if (result.status != 201) {
+//         errors++;
+//         console.log('Erro diff 201;' + result.status);
+//         throw 'Erro diff 201;' + result.status;
+//       } else {
+//         return result;
+//       }
+//     }
+//     catch (ex) {
+//       counting++;
+//       errors++;
+//       if (ex.code == 'ECONNRESET' || ex.code == 'ETIMEDOUT' || ex.code == 'ECONNABORTED') {
+//         console.log('Erro de connection;' + ex.code);
+//         return null;
+//       } else {
+//         console.log(ex);
+//         throw ex;
+//       }
+//     }
+//   });

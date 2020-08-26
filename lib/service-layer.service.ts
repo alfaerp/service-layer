@@ -5,7 +5,11 @@ import {
   HttpStatus,
   HttpException,
 } from '@nestjs/common';
-import { ServiceLayerModuleOptions, ServiceLayerCompany } from './interfaces';
+import {
+  ServiceLayerModuleOptions,
+  ServiceLayerCompany,
+  ServiceLayerToken,
+} from './interfaces';
 import {
   ALFAERP_SERVICE_LAYER_OPTIONS,
   Endpoints,
@@ -13,6 +17,8 @@ import {
 import Axios, { AxiosInstance, AxiosRequestConfig, AxiosResponse } from 'axios';
 import { backOff } from 'exponential-backoff';
 import * as https from 'https';
+import moment from 'moment';
+import { reject } from 'lodash';
 
 @Injectable()
 export class ServiceLayerService {
@@ -20,6 +26,8 @@ export class ServiceLayerService {
     withCredentials: false,
   });
   private PENDING_REQUESTS: number = 0;
+  private loginPromises: Record<string, Promise<string | null>> = {};
+  private tokens: Record<string, ServiceLayerToken> = {};
 
   constructor(
     @Optional()
@@ -54,7 +62,9 @@ export class ServiceLayerService {
           if (this.PENDING_REQUESTS < (this.options.maxConcurrentCalls || 8)) {
             this.PENDING_REQUESTS++;
             clearInterval(interval);
-            resolve(config);
+            this.configureRequest(config).then(newConfig => {
+              resolve(newConfig);
+            });
           }
         }, 10);
       });
@@ -72,50 +82,102 @@ export class ServiceLayerService {
     );
   }
 
-  get(
+  async get(
     path: string,
-    company: ServiceLayerCompany,
     config?: AxiosRequestConfig,
   ): Promise<AxiosResponse<any>> {
     return this.axios.get(path, config);
   }
 
-  post(
+  async post(
     path: string,
-    company: ServiceLayerCompany,
     data?: any,
     config?: AxiosRequestConfig,
   ): Promise<AxiosResponse<any>> {
     return this.axios.post(path, data, config);
   }
 
-  patch(
+  async patch(
     path: string,
-    company: ServiceLayerCompany,
     data?: any,
     config?: AxiosRequestConfig,
   ): Promise<AxiosResponse<any>> {
     return this.axios.patch(path, data, config);
   }
 
-  delete(
+  async delete(
     path: string,
-    company: ServiceLayerCompany,
     config?: AxiosRequestConfig,
   ): Promise<AxiosResponse<any>> {
     return this.axios.delete(path, config);
   }
 
-  async login(company: ServiceLayerCompany) {
-    try {
-      const result = await this.post('Login', company, company);
-      if (result.status !== 200) {
-        console.log(result.status);
-        console.log(result.statusText);
-      } else {
-      }
-    } catch (ex) {
-      console.log(ex);
+  async configureRequest(
+    config: AxiosRequestConfig,
+  ): Promise<AxiosRequestConfig> {
+    if (config.url != Endpoints.Login) {
+      let company: ServiceLayerCompany = {
+        CompanyDB: config.headers['alfaerp-company'],
+        UserName: config.headers['alfaerp-username'],
+        Password: config.headers['alfaerp-password'],
+      };
+
+      let token = await this.getToken(company);
+      config.headers = {
+        ...config.headers,
+        Cookie: 'B1SESSION=' + token,
+      };
     }
+
+    return config;
+  }
+
+  async getToken(company: ServiceLayerCompany): Promise<string | null> {
+    let loginPromise = this.loginPromises[company.CompanyDB];
+    console.log(company.CompanyDB + ' - ' + JSON.stringify(this.tokens));
+
+    if (loginPromise) {
+      return loginPromise;
+    } else {
+      let token = this.tokens[company.CompanyDB];
+      if (this.isValidToken(token)) {
+        return token.value;
+      } else {
+        this.loginPromises[company.CompanyDB] = new Promise(
+          (resolve, reject) => {
+            this.post('Login', company)
+              .then(result => {
+                if (result.status == 200) {
+                  this.tokens[company.CompanyDB] = {
+                    value: result.data.SessionId,
+                    timestamp: moment(),
+                  };
+                  resolve(result.data.SessionId);
+                }
+              })
+              .catch(reason => {
+                resolve(null);
+              });
+          },
+        );
+
+        return this.loginPromises[company.CompanyDB];
+      }
+    }
+  }
+
+  isValidToken(token: ServiceLayerToken): boolean {
+    if (token) {
+      let duration = moment
+        .duration(moment().diff(token.timestamp))
+        .asMinutes();
+      if (duration > 10) {
+        return false;
+      }
+    } else {
+      return false;
+    }
+
+    return true;
   }
 }

@@ -1,6 +1,6 @@
 {
   "name": "@alfaerp/service-layer",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "description": "SAP B1 Service Layer provider for Nest (@alfaerp/service-layer)",
   "author": "Henry Silva",
   "license": "MIT",
@@ -17,9 +17,12 @@
     "release": "release-it"
   },
   "dependencies": {
+    "@types/lodash": "^4.14.160",
     "@types/tiny-async-pool": "^1.0.0",
     "axios": "^0.20.0",
     "exponential-backoff": "^3.1.0",
+    "lodash": "^4.17.20",
+    "moment": "^2.27.0",
     "tiny-async-pool": "^1.1.0"
   },
   "devDependencies": {

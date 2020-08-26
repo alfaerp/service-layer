@@ -3,3 +3,8 @@ export interface ServiceLayerCompany {
   UserName: string;
   Password: string;
 }
+
+export interface ServiceLayerToken {
+  value: string;
+  timestamp: moment.Moment;
+}
