@@ -19,6 +19,7 @@ import { backOff } from 'exponential-backoff';
 import * as https from 'https';
 import moment from 'moment';
 import { reject } from 'lodash';
+import { BatchRequest } from './interfaces/service-layer-batch.interface';
 
 @Injectable()
 export class ServiceLayerService {
@@ -97,6 +98,20 @@ export class ServiceLayerService {
     return this.axios.post(path, data, config);
   }
 
+  async batch(
+    data: BatchRequest,
+    config?: AxiosRequestConfig,
+  ): Promise<AxiosResponse<any>> {
+    config = config || { headers: {} };
+    config.headers['Content-Type'] =
+      'multipart/mixed;boundary=' + data.batchId();
+    if (data.replaceCollections) {
+      config.headers['B1S-ReplaceCollectionsOnPatch'] = true;
+    }
+    console.log(data.raw());
+    return this.axios.post('$batch', data.raw(), config);
+  }
+
   async patch(
     path: string,
     data?: any,
@@ -134,8 +149,6 @@ export class ServiceLayerService {
 
   async getToken(company: ServiceLayerCompany): Promise<string | null> {
     let loginPromise = this.loginPromises[company.CompanyDB];
-    console.log(company.CompanyDB + ' - ' + JSON.stringify(this.tokens));
-
     if (loginPromise) {
       return loginPromise;
     } else {
