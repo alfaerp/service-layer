@@ -1,4 +1,5 @@
 import { v4 as uuidv4 } from 'uuid';
+import { HttpStatus } from '@nestjs/common';
 
 export enum RequestMethodType {
   'GET' = 'GET',
@@ -8,21 +9,54 @@ export enum RequestMethodType {
   'DELETE' = 'DELETE',
 }
 
-export interface Request {
+export interface ODataBatchRequest {
   id?: string;
   data?: any;
   method: RequestMethodType;
   path: string;
 }
 
+export interface ODataBatchResponse {
+  statusCode: HttpStatus;
+  statusText: string;
+  data?: any;
+}
+
+export class BatchResponse {
+  public rawResponse: any;
+  public statusCode: HttpStatus = 400;
+  public responses: ODataBatchResponse[] = [];
+  constructor() {}
+  hasErrors(): boolean {
+    return (
+      this.statusCode == 400 ||
+      this.responses.filter(r => ![200, 202, 204].includes(r.statusCode))
+        .length > 0
+    );
+  }
+
+  firstError(): ODataBatchResponse | null {
+    if (this.hasErrors()) {
+      return this.responses.filter(
+        r => ![200, 202, 204].includes(r.statusCode),
+      )[0];
+    } else {
+      return null;
+    }
+  }
+}
+
 export class BatchRequest {
-  private _requests: Request[] = [];
-  private _changesets: Changeset[] = [];
+  private _requests: ODataBatchRequest[] = [];
+  private _changesets: ODataBatchChangeset[] = [];
   private _id: string;
   private _batchId: string;
   replaceCollections: any;
 
-  constructor(requests: Request[] = [], changesets: Changeset[] = []) {
+  constructor(
+    requests: ODataBatchRequest[] = [],
+    changesets: ODataBatchChangeset[] = [],
+  ) {
     this._id = uuidv4();
     this._batchId = 'batch_' + this._id;
 
@@ -39,7 +73,7 @@ export class BatchRequest {
     }
   }
 
-  addRequest(request: Request) {
+  addRequest(request: ODataBatchRequest) {
     this._requests.push(request);
   }
 
@@ -51,11 +85,11 @@ export class BatchRequest {
     return this._id;
   }
 
-  changesets(): Changeset[] {
+  changesets(): ODataBatchChangeset[] {
     return this._changesets;
   }
 
-  requests(): Request[] {
+  requests(): ODataBatchRequest[] {
     return this._requests;
   }
 
@@ -105,19 +139,18 @@ ${JSON.stringify(r.data)}
     return `
 ${this._changesets
   .map(c => {
-    return `--${c.id()}
+    return `--${this._batchId}
 Content-Type: multipart/mixed;boundary=${c.id()}
 
 ${c.getRawRequests()}
---${c.id()}--
-  `;
+--${c.id()}--`;
   })
   .join('')}`;
   }
 }
 
-class Changeset {
-  private _requests: Request[] = [];
+export class ODataBatchChangeset {
+  private _requests: ODataBatchRequest[] = [];
   private _id: string;
 
   constructor() {
@@ -128,11 +161,11 @@ class Changeset {
     return this._id;
   }
 
-  requests(): Request[] {
+  requests(): ODataBatchRequest[] {
     return this._requests;
   }
 
-  addRequest(request: Request) {
+  addRequest(request: ODataBatchRequest) {
     this._requests.push(request);
   }
 

@@ -19,7 +19,11 @@ import { backOff } from 'exponential-backoff';
 import * as https from 'https';
 import moment from 'moment';
 import { reject } from 'lodash';
-import { BatchRequest } from './interfaces/service-layer-batch.interface';
+import {
+  BatchRequest,
+  BatchResponse,
+  ODataBatchResponse,
+} from './interfaces/service-layer-batch.interface';
 
 @Injectable()
 export class ServiceLayerService {
@@ -101,15 +105,29 @@ export class ServiceLayerService {
   async batch(
     data: BatchRequest,
     config?: AxiosRequestConfig,
-  ): Promise<AxiosResponse<any>> {
+  ): Promise<BatchResponse> {
     config = config || { headers: {} };
     config.headers['Content-Type'] =
       'multipart/mixed;boundary=' + data.batchId();
     if (data.replaceCollections) {
       config.headers['B1S-ReplaceCollectionsOnPatch'] = true;
     }
-    console.log(data.raw());
-    return this.axios.post('$batch', data.raw(), config);
+
+    const response = new BatchResponse();
+    try {
+      let result = await this.axios.post('$batch', data.raw(), config);
+      response.rawResponse = result;
+      if (
+        result.status == 200 ||
+        result.status == 202 ||
+        result.status == 204
+      ) {
+        response.statusCode = 200;
+        response.responses = this.batchResponseHandler(result);
+      }
+    } catch (ex) {}
+
+    return response;
   }
 
   async patch(
@@ -192,5 +210,67 @@ export class ServiceLayerService {
     }
 
     return true;
+  }
+
+  private batchResponseHandler(r: AxiosResponse): ODataBatchResponse[] {
+    const batchResponses: ODataBatchResponse[] = [];
+
+    const headerContentType = r.headers['content-type'];
+    const boundary = headerContentType.replace('multipart/mixed;boundary=', '');
+
+    const batchPartRegex = RegExp('--' + boundary + '(?:\r\n)?(?:--\r\n)?');
+    const batchParts = r.data
+      .split(batchPartRegex)
+      .filter((p: string) => p.trim() != '')
+      .map((p: string) => p.trim());
+    const contentTypeRegExp = RegExp('^content-type', 'i');
+
+    for (let i = 0; i < batchParts.length; i++) {
+      const batchPart = batchParts[i];
+      if (contentTypeRegExp.test(batchPart)) {
+        const rawResponse = batchPart.split('\r\n\r\n');
+
+        const httpResponseWithHeaders = rawResponse[1].split('\r\n');
+        const responseRegex = RegExp('HTTP/1.1 ([0-9]{3}) (.+)');
+        const httpCodeAndDesc = httpResponseWithHeaders[0].match(responseRegex);
+        const httpCode = parseInt(httpCodeAndDesc[1]);
+        const httpDesc = httpCodeAndDesc[2];
+
+        if (httpCode == 200 || httpCode == 201 || httpCode == 202) {
+          const result: ODataBatchResponse = {
+            statusCode: 200,
+            statusText: 'OK',
+            data: JSON.parse(rawResponse[2]),
+          };
+          batchResponses.push(result);
+        } else if (httpCode == 204) {
+          const result: ODataBatchResponse = {
+            statusCode: 200,
+            statusText: 'OK',
+            data: null,
+          };
+          batchResponses.push(result);
+        } else {
+          const errorData = JSON.parse(rawResponse[2]);
+          if (httpCode == 400 && errorData.error && errorData.error.message) {
+            const result: ODataBatchResponse = {
+              statusCode: 400,
+              statusText: errorData.error.message.value.toString(),
+              data: null,
+            };
+            batchResponses.push(result);
+          } else {
+            const result: ODataBatchResponse = {
+              statusCode: 400,
+              statusText: httpDesc,
+              data: null,
+            };
+            batchResponses.push(result);
+          }
+        }
+      }
+    }
+
+    return batchResponses;
   }
 }
