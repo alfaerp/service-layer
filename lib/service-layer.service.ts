@@ -7,23 +7,27 @@ import {
 } from '@nestjs/common';
 import {
   ServiceLayerModuleOptions,
-  ServiceLayerCompany,
   ServiceLayerToken,
+  ServiceLayerRequestConfig,
 } from './interfaces';
 import {
   ALFAERP_SERVICE_LAYER_OPTIONS,
   Endpoints,
 } from './service-layer.constants';
-import Axios, { AxiosInstance, AxiosRequestConfig, AxiosResponse } from 'axios';
-import { backOff } from 'exponential-backoff';
-import * as https from 'https';
-import moment from 'moment';
-import { reject } from 'lodash';
+import Axios, { AxiosInstance, AxiosResponse } from 'axios';
 import {
   BatchRequest,
   BatchResponse,
   ODataBatchResponse,
 } from './interfaces/service-layer-batch.interface';
+import {
+  ServiceLayerResponse,
+  ServiceLayerStatusCode,
+} from './interfaces/service-layer-request-response.interface';
+import { backOff } from 'exponential-backoff';
+import * as https from 'https';
+import * as _ from 'lodash';
+import dayjs from 'dayjs';
 
 @Injectable()
 export class ServiceLayerService {
@@ -49,7 +53,29 @@ export class ServiceLayerService {
     };
 
     this.axios.interceptors.request.use(config => {
+      const serviceLayerConfig: ServiceLayerRequestConfig = {
+        credentials: { CompanyDB: '', Password: '', UserName: '' },
+        retries: 0,
+        shouldRetry: async () => true,
+        ...config,
+      };
+
       return new Promise((resolve, reject) => {
+        if (config.url != Endpoints.Login) {
+          if (
+            serviceLayerConfig.credentials.CompanyDB == '' ||
+            serviceLayerConfig.credentials.Password == '' ||
+            serviceLayerConfig.credentials.UserName == ''
+          ) {
+            reject(
+              new HttpException(
+                'Invalid credentials.',
+                HttpStatus.UNAUTHORIZED,
+              ),
+            );
+          }
+        }
+
         if (this.options.maxConcurrentQueue != Infinity) {
           if (
             this.PENDING_REQUESTS > (this.options.maxConcurrentQueue || 1000)
@@ -67,11 +93,20 @@ export class ServiceLayerService {
           if (this.PENDING_REQUESTS < (this.options.maxConcurrentCalls || 8)) {
             this.PENDING_REQUESTS++;
             clearInterval(interval);
-            this.configureRequest(config).then(newConfig => {
-              resolve(newConfig);
-            });
+            this.configureRequest(serviceLayerConfig)
+              .then(newConfig => {
+                resolve(newConfig);
+              })
+              .catch(reason => {
+                reject(
+                  new HttpException(
+                    'Failed to login.',
+                    HttpStatus.UNAUTHORIZED,
+                  ),
+                );
+              });
           }
-        }, 10);
+        }, 100 * this.PENDING_REQUESTS);
       });
     });
 
@@ -87,26 +122,216 @@ export class ServiceLayerService {
     );
   }
 
-  async get(
-    path: string,
-    config?: AxiosRequestConfig,
-  ): Promise<AxiosResponse<any>> {
-    return this.axios.get(path, config);
+  async parallel<T>(
+    data: Array<T>,
+    iteratee: (item: T) => Promise<ServiceLayerResponse<T>>,
+  ): Promise<ServiceLayerResponse<T>[]> {
+    let promises = [];
+    for (let index = 0; index < data.length; index++) {
+      const item = data[index];
+      const promise = new Promise<ServiceLayerResponse<T>>(
+        (resolve, reject) => {
+          setTimeout(() => {
+            iteratee(item)
+              .then(result => {
+                resolve(result);
+              })
+              .catch(ex => {
+                const res: ServiceLayerResponse<T> = {
+                  status: ServiceLayerStatusCode.SERVICE_LAYER_ERROR,
+                  error: {
+                    code: '500',
+                    message: 'Error',
+                  },
+                };
+                resolve(res);
+              });
+          }, index * 100);
+        },
+      );
+      promises.push(promise);
+    }
+
+    return Promise.all<ServiceLayerResponse<T>>(promises);
   }
 
-  async post(
+  async get<T>(
+    path: string,
+    config: ServiceLayerRequestConfig,
+  ): Promise<ServiceLayerResponse<T>> {
+    return this.execute<T>(this.axios.get(path, config), path, null, config);
+  }
+
+  async post<T>(
+    path: string,
+    data: any,
+    config: ServiceLayerRequestConfig,
+  ): Promise<ServiceLayerResponse<T>> {
+    return this.execute<T>(
+      this.axios.post(path, data, config),
+      path,
+      data,
+      config,
+    );
+  }
+
+  async patch<T>(
     path: string,
     data?: any,
-    config?: AxiosRequestConfig,
-  ): Promise<AxiosResponse<any>> {
-    return this.axios.post(path, data, config);
+    config?: ServiceLayerRequestConfig,
+  ): Promise<ServiceLayerResponse<T>> {
+    return this.execute<T>(
+      this.axios.patch(path, data, config),
+      path,
+      data,
+      config,
+    );
+  }
+
+  async delete<T>(
+    path: string,
+    config: ServiceLayerRequestConfig,
+  ): Promise<ServiceLayerResponse<T>> {
+    return this.execute<T>(this.axios.delete(path, config), path, null, config);
+  }
+
+  private execute<T>(
+    req: Promise<AxiosResponse>,
+    path: string,
+    data?: any,
+    config?: ServiceLayerRequestConfig,
+  ): Promise<ServiceLayerResponse<T>> {
+    const retries = _.get(config, 'retries', 0);
+    const shouldRetry = _.get(config, 'shouldRetry', async () => true);
+
+    const fn = async () => {
+      try {
+        const response = await req;
+        return this.resolveResponse<T>(response);
+      } catch (exception) {
+        const response = this.resolveError<T>(exception);
+        if (
+          retries > 0 &&
+          response.status == ServiceLayerStatusCode.SERVICE_LAYER_ERROR
+        ) {
+          throw response;
+        } else {
+          return response;
+        }
+      }
+    };
+
+    if (retries > 0) {
+      return backOff(() => fn(), {
+        numOfAttempts: retries,
+        retry: (e, a) => shouldRetry(path, data, e, a),
+        delayFirstAttempt: true,
+      });
+    } else {
+      return fn();
+    }
+  }
+
+  private resolveError<T>(exception: any): ServiceLayerResponse<T> {
+    let code = _.get(exception, 'code', null);
+    let status = _.get(exception, 'status', null);
+    let message = _.get(exception, 'message', null);
+    let axiosError = _.get(exception, 'isAxiosError', false);
+
+    let result: ServiceLayerResponse<T>;
+
+    if (code == 'ECONNRESET' || code == 'ETIMEDOUT' || code == 'ECONNABORTED') {
+      result = {
+        status: ServiceLayerStatusCode.SERVICE_LAYER_ERROR,
+        error: {
+          code,
+          message: code,
+        },
+      };
+    } else {
+      if (axiosError) {
+        const odataErrorCode = _.get(
+          exception,
+          'response.data.error.code',
+          null,
+        );
+        const odataErrorMessage = _.get(
+          exception,
+          'response.data.error.message.value',
+          null,
+        );
+
+        const axiosErrorCode = _.get(exception, 'response.status', null);
+        const axiosErrorMessage = _.get(exception, 'response.statusText', null);
+
+        result = {
+          status: ServiceLayerStatusCode.BUSINESS_ERROR,
+          error: {
+            code: odataErrorCode || axiosErrorCode || code || status || '500',
+            message:
+              odataErrorMessage || axiosErrorMessage || message || 'Error',
+          },
+        };
+      } else {
+        result = {
+          status: ServiceLayerStatusCode.BUSINESS_ERROR,
+          error: {
+            code: code || status || '500',
+            message: message || 'Error',
+          },
+        };
+      }
+    }
+
+    return result;
+  }
+
+  private resolveResponse<T>(response: AxiosResponse): ServiceLayerResponse<T> {
+    if (
+      response.status == 200 ||
+      response.status == 201 ||
+      response.status == 202 ||
+      response.status == 204
+    ) {
+      let noContent = response.status == 204;
+      let dataArray = _.get(response, 'data.value', null);
+      let dataSingle = _.get(response, 'data', null);
+
+      if (dataSingle) {
+        delete dataSingle['odata.metadata'];
+      }
+
+      const result: ServiceLayerResponse<T> = {
+        data: noContent ? null : dataArray || dataSingle,
+        status: ServiceLayerStatusCode.SUCCESS,
+      };
+      return result;
+    } else {
+      const odataErrorCode = _.get(response, 'data.error.code', null);
+      const odataErrorMessage = _.get(
+        response,
+        'data.error.message.value',
+        null,
+      );
+
+      const axiosErrorCode = _.get(response, 'status', null);
+      const axiosErrorMessage = _.get(response, 'statusText', null);
+
+      return {
+        status: ServiceLayerStatusCode.BUSINESS_ERROR,
+        error: {
+          code: odataErrorCode || axiosErrorCode || '500',
+          message: odataErrorMessage || axiosErrorMessage || 'Error',
+        },
+      };
+    }
   }
 
   async batch(
     data: BatchRequest,
-    config?: AxiosRequestConfig,
+    config: ServiceLayerRequestConfig,
   ): Promise<BatchResponse> {
-    config = config || { headers: {} };
+    config.headers = config.headers || {};
     config.headers['Content-Type'] =
       'multipart/mixed;boundary=' + data.batchId();
     if (data.replaceCollections) {
@@ -125,90 +350,85 @@ export class ServiceLayerService {
         response.statusCode = 200;
         response.responses = this.batchResponseHandler(result);
       }
-    } catch (ex) {}
+    } catch (ex) {
+      response.rawResponse = ex;
+    }
 
     return response;
   }
 
-  async patch(
-    path: string,
-    data?: any,
-    config?: AxiosRequestConfig,
-  ): Promise<AxiosResponse<any>> {
-    return this.axios.patch(path, data, config);
+  private async login(data: any): Promise<AxiosResponse<any>> {
+    return this.axios.post('Login', data);
   }
 
-  async delete(
-    path: string,
-    config?: AxiosRequestConfig,
-  ): Promise<AxiosResponse<any>> {
-    return this.axios.delete(path, config);
-  }
-
-  async configureRequest(
-    config: AxiosRequestConfig,
-  ): Promise<AxiosRequestConfig> {
+  private async configureRequest(
+    config: ServiceLayerRequestConfig,
+  ): Promise<ServiceLayerRequestConfig> {
     if (config.url != Endpoints.Login) {
-      let company: ServiceLayerCompany = {
-        CompanyDB: config.headers['alfaerp-company'],
-        UserName: config.headers['alfaerp-username'],
-        Password: config.headers['alfaerp-password'],
-      };
-
-      let token = await this.getToken(company);
-      config.headers = {
-        ...config.headers,
-        Cookie: 'B1SESSION=' + token,
-      };
+      let token = await backOff(() => this.getToken(config), {
+        delayFirstAttempt: true,
+        maxDelay: 500,
+        numOfAttempts: 3,
+      });
+      if (token) {
+        config.headers = {
+          ...config.headers,
+          Cookie: 'B1SESSION=' + token,
+        };
+      } else {
+        throw 'Login failed.';
+      }
     }
-
     return config;
   }
 
-  async getToken(company: ServiceLayerCompany): Promise<string | null> {
-    let loginPromise = this.loginPromises[company.CompanyDB];
+  private async getToken(
+    config: ServiceLayerRequestConfig,
+  ): Promise<string | null> {
+    const credentials = config.credentials;
+    const loginPromise = this.loginPromises[credentials.CompanyDB];
     if (loginPromise) {
       return loginPromise;
     } else {
-      let token = this.tokens[company.CompanyDB];
+      let token = this.tokens[credentials.CompanyDB];
       if (this.isValidToken(token)) {
         return token.value;
       } else {
-        this.loginPromises[company.CompanyDB] = new Promise(
+        this.loginPromises[credentials.CompanyDB] = new Promise(
           (resolve, reject) => {
-            this.post('Login', company)
+            this.login(credentials)
               .then(result => {
                 if (result.status == 200) {
-                  this.tokens[company.CompanyDB] = {
+                  this.tokens[credentials.CompanyDB] = {
                     value: result.data.SessionId,
-                    timestamp: moment(),
+                    timestamp: dayjs(),
                   };
                   resolve(result.data.SessionId);
+                  delete this.loginPromises[credentials.CompanyDB];
+                } else {
+                  reject(null);
                 }
               })
               .catch(reason => {
-                resolve(null);
+                reject(null);
+                delete this.loginPromises[credentials.CompanyDB];
               });
           },
         );
-
-        return this.loginPromises[company.CompanyDB];
+        return this.loginPromises[credentials.CompanyDB];
       }
     }
   }
 
-  isValidToken(token: ServiceLayerToken): boolean {
+  private isValidToken(token: ServiceLayerToken): boolean {
     if (token) {
-      let duration = moment
-        .duration(moment().diff(token.timestamp))
-        .asMinutes();
+      let duration = dayjs().diff(token.timestamp, 'minute');
       if (duration > 10) {
         return false;
       }
     } else {
       return false;
     }
-
     return true;
   }
 

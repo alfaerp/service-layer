@@ -2,6 +2,9 @@ import { DynamicModule, Module, Global } from '@nestjs/common';
 import { ALFAERP_SERVICE_LAYER_OPTIONS } from './service-layer.constants';
 import { ServiceLayerModuleOptions } from './interfaces';
 import { ServiceLayerService } from './service-layer.service';
+import dayjs from 'dayjs';
+
+const MINUTE = 1000 * 60 * 1;
 
 @Global()
 @Module({})
@@ -17,7 +20,7 @@ export class ServiceLayerModule {
       maxConcurrentCalls: 8,
       maxConcurrentQueue: Infinity,
       caseInsensitive: true,
-      timeout: 1000 * 60,
+      timeout: MINUTE,
     };
 
     let config = {

@@ -1,4 +1,5 @@
-import moment from 'moment';
+import { AxiosRequestConfig } from 'axios';
+import dayjs from 'dayjs';
 
 export interface ServiceLayerCompany {
   CompanyDB: string;
@@ -8,5 +9,5 @@ export interface ServiceLayerCompany {
 
 export interface ServiceLayerToken {
   value: string;
-  timestamp: moment.Moment;
+  timestamp: dayjs.Dayjs;
 }
